@@ -4,12 +4,10 @@
 import cupy as cp
 import numpy as np
 
-from cuml.common import CumlArray
-from cuml.common.array_descriptor import CumlArrayDescriptor
 from cuml.common.doc_utils import generate_docstring
 from cuml.internals.base import Base, get_handle
 from cuml.internals.mixins import FMajorInputTagMixin
-from cuml.internals.outputs import reflect
+from cuml.internals.outputs import ReflectedAttr, mlfunc
 from cuml.internals.validation import check_inputs, check_is_fitted
 
 from libc.stdint cimport uintptr_t
@@ -81,7 +79,7 @@ def fit_cd(
     y,
     sample_weight=None,
     *,
-    convert_dtype=True,
+    convert_dtype="deprecated",
     loss="squared_loss",
     double alpha=0.0001,
     double l1_ratio=0.15,
@@ -102,8 +100,13 @@ def fit_cd(
         The target values.
     sample_weight : None or array-like, shape=(n_samples,)
         The sample weights.
-    convert_dtype : bool, default=True
-        When set to True, will convert array inputs to be of the proper dtypes.
+    convert_dtype : bool, default="deprecated"
+        .. deprecated:: 26.08
+            `convert_dtype` was deprecated in version 26.08 and will be
+            removed in version 26.10. cuML only copies input arrays when
+            necessary (e.g. to unify dtypes), there is no reason to provide
+            this keyword going forward.
+
     **kwargs
         Remaining keyword arguments match the hyperparameters
         to ``CD``, see the ``CD`` docs for more information.
@@ -264,7 +267,7 @@ class CD(FMajorInputTagMixin, Base):
     >>> y = cudf.Series(cp.array([6.0, 8.0, 9.0, 11.0], dtype=cp.float32))
 
     >>> cd.fit(X,y)
-    CD()
+    CD(alpha=0.0)
     >>> print(cd.coef_) # doctest: +SKIP
     0 1.001...
     1 1.998...
@@ -281,7 +284,7 @@ class CD(FMajorInputTagMixin, Base):
     1 14.995...
     dtype: float32
     """
-    coef_ = CumlArrayDescriptor()
+    coef_ = ReflectedAttr()
 
     @classmethod
     def _get_param_names(cls):
@@ -311,8 +314,8 @@ class CD(FMajorInputTagMixin, Base):
         self.shuffle = shuffle
 
     @generate_docstring()
-    @reflect(reset="type")
-    def fit(self, X, y, convert_dtype=True, sample_weight=None) -> "CD":
+    @mlfunc(set_input_type=True)
+    def fit(self, X, y, convert_dtype="deprecated", sample_weight=None) -> "CD":
         """
         Fit the model with X and y.
         """
@@ -330,7 +333,7 @@ class CD(FMajorInputTagMixin, Base):
             tol=self.tol,
             shuffle=self.shuffle,
         )
-        self.coef_ = CumlArray(data=coef)
+        self.coef_ = coef
         self.intercept_ = intercept
         self.n_iter_ = n_iter
 
@@ -340,19 +343,18 @@ class CD(FMajorInputTagMixin, Base):
                                        'type': 'dense',
                                        'description': 'Predicted values',
                                        'shape': '(n_samples, 1)'})
-    @reflect
-    def predict(self, X, convert_dtype=True) -> CumlArray:
+    @mlfunc(preserve_index=True)
+    def predict(self, X, convert_dtype="deprecated"):
         """
         Predicts the y for X.
         """
         check_is_fitted(self)
 
-        X, index = check_inputs(
+        X = check_inputs(
             self,
             X,
             dtype=self.coef_.dtype,
             convert_dtype=convert_dtype,
-            return_index=True,
         )
         preds = cp.zeros(X.shape[0], dtype=self.coef_.dtype, order="F")
 
@@ -360,7 +362,7 @@ class CD(FMajorInputTagMixin, Base):
         cdef int n_cols = X.shape[1]
         cdef uintptr_t X_ptr = X.data.ptr
         cdef uintptr_t preds_ptr = preds.data.ptr
-        cdef uintptr_t coef_ptr = self.coef_.ptr
+        cdef uintptr_t coef_ptr = self.coef_.data.ptr
         cdef double intercept = self.intercept_
         handle = get_handle()
         cdef handle_t* handle_ = <handle_t*><size_t>handle.getHandle()
@@ -391,4 +393,4 @@ class CD(FMajorInputTagMixin, Base):
                 )
         handle.sync()
 
-        return CumlArray(data=preds, index=index)
+        return preds
